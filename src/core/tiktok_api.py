@@ -383,20 +383,22 @@ class TikTokAPI:
             self._add_live_url_candidate(candidates, stream_url.get("rtmp_pull_url"))
             return candidates
 
-        # Extract stream options; a truncated payload must not kill the run,
-        # the legacy urls below are still usable.
+        # Extract stream options; a truncated, dict-shaped or otherwise broken
+        # payload must not kill the run, the legacy urls below are still usable.
+        malformed_sdk_data = False
         try:
             sdk_data = json.loads(sdk_data_str).get("data", {})
-        except (ValueError, AttributeError) as ex:
+        except (TypeError, ValueError, AttributeError) as ex:
             logger.warning(f"Malformed stream_data payload ({ex}); using legacy urls.")
             sdk_data = {}
+            malformed_sdk_data = True
         qualities = (
             stream_url.get("live_core_sdk_data", {})
             .get("pull_data", {})
             .get("options", {})
             .get("qualities", [])
         )
-        if not qualities:
+        if not qualities and not malformed_sdk_data:
             logger.warning("No qualities found in the stream data. Returning None.")
             return candidates
         level_map = {q["sdk_key"]: q["level"] for q in qualities}

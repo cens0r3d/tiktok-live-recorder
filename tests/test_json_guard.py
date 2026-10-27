@@ -36,6 +36,14 @@ class ListResponse:
         return [1, 2, 3]
 
 
+class JsonResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 class FakeHttpClient:
     def __init__(self, response):
         self.response = response
@@ -43,7 +51,10 @@ class FakeHttpClient:
 
     def get(self, url, **kwargs):
         self.urls.append(url)
-        return self.response
+        # a plain dict stands for "TikTok answered with this JSON payload"
+        if hasattr(self.response, "json"):
+            return self.response
+        return JsonResponse(self.response)
 
 
 def build_api(response):
@@ -85,6 +96,46 @@ def test_is_room_alive_does_not_crash_on_blocked_response():
 
     with pytest.raises(TikTokRecorderError):
         api.is_room_alive("1234567890")
+
+
+def test_dict_shaped_stream_data_falls_back_to_legacy_urls():
+    # stream_data is normally a JSON *string*; TikTok sometimes ships it as an
+    # object, which made json.loads() raise TypeError.
+    api = build_api(
+        {
+            "data": {
+                "status": 2,
+                "stream_url": {
+                    "live_core_sdk_data": {
+                        "pull_data": {"stream_data": {"data": {"hd": {}}}}
+                    },
+                    "flv_pull_url": {"HD1": "https://cdn/legacy_hd.flv"},
+                },
+            },
+            "status_code": 0,
+        }
+    )
+
+    assert api.get_live_urls("123") == ["https://cdn/legacy_hd.flv"]
+
+
+def test_malformed_stream_data_keeps_legacy_urls_without_qualities():
+    # truncated payload *and* no qualities block: the early return used to hand
+    # back an empty candidate list, losing the flv_pull_url fallback.
+    api = build_api(
+        {
+            "data": {
+                "status": 2,
+                "stream_url": {
+                    "live_core_sdk_data": {"pull_data": {"stream_data": '{"data": '}},
+                    "flv_pull_url": {"HD1": "https://cdn/legacy_hd.flv"},
+                },
+            },
+            "status_code": 0,
+        }
+    )
+
+    assert api.get_live_urls("123") == ["https://cdn/legacy_hd.flv"]
 
 
 def test_get_room_id_from_user_does_not_crash_on_blocked_response():
