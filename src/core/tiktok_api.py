@@ -316,6 +316,30 @@ class TikTokAPI:
             logger.warning(f"Failed to extract stream URL from page: {e}")
             return None
 
+    @staticmethod
+    def _is_audio_only(url: str) -> bool:
+        """Audio-only variants carry `only_audio=1` in the CDN url."""
+        return "only_audio" in url
+
+    @staticmethod
+    def _video_first(candidates: list[str]) -> list[str]:
+        """
+        Put audio-only urls last.
+
+        The API exposes an audio variant next to every video quality (sdk key
+        `ao`). Candidates are tried in order, so an audio variant sitting in
+        front produced recordings with a video container but no picture
+        (issue #471). A live without any video still falls back to it.
+        """
+        video = [u for u in candidates if not TikTokAPI._is_audio_only(u)]
+        audio = [u for u in candidates if TikTokAPI._is_audio_only(u)]
+        if not video and audio:
+            logger.warning(
+                "This live only exposes an audio-only stream: "
+                "the recording will have no video."
+            )
+        return video + audio
+
     def _add_live_url_candidate(self, candidates: list[str], url: str | None) -> None:
         if url and url not in candidates:
             candidates.append(url)
@@ -368,7 +392,7 @@ class TikTokAPI:
                 self._add_live_url_candidate(candidates, flv_pull_url.get(key))
             self._add_live_url_candidate(candidates, stream_url.get("hls_pull_url"))
             self._add_live_url_candidate(candidates, stream_url.get("rtmp_pull_url"))
-            return candidates
+            return self._video_first(candidates)
 
         # Extract stream options
         sdk_data = json.loads(sdk_data_str).get("data", {})
@@ -380,7 +404,7 @@ class TikTokAPI:
         )
         if not qualities:
             logger.warning("No qualities found in the stream data. Returning None.")
-            return candidates
+            return self._video_first(candidates)
         level_map = {q["sdk_key"]: q["level"] for q in qualities}
 
         ordered_sdk_keys = sorted(
@@ -400,7 +424,7 @@ class TikTokAPI:
         self._add_live_url_candidate(candidates, stream_url.get("hls_pull_url"))
         self._add_live_url_candidate(candidates, stream_url.get("rtmp_pull_url"))
 
-        return candidates
+        return self._video_first(candidates)
 
     def get_live_url(self, room_id: str, user: str = None) -> str | None:
         """Return the first candidate CDN URL for the streaming."""

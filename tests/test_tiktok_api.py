@@ -60,6 +60,46 @@ def test_is_room_alive_accepts_confirmed_stream_room():
     assert api.is_room_alive("123") is True
 
 
+def test_audio_only_candidate_is_moved_to_the_end():
+    # real payloads carry the audio variant as <same>.flv?...&only_audio=1
+    api = build_api(
+        {
+            "data": {
+                "status": 2,
+                "stream_url": {
+                    "flv_pull_url": {
+                        "HD1": "https://cdn/audio.flv?sign=a&only_audio=1",
+                        "SD1": "https://cdn/hd.flv?sign=b",
+                    }
+                },
+            },
+            "status_code": 0,
+        },
+    )
+
+    assert api.get_live_urls("123") == [
+        "https://cdn/hd.flv?sign=b",
+        "https://cdn/audio.flv?sign=a&only_audio=1",
+    ]
+
+
+def test_audio_only_live_still_returns_a_url():
+    # a live that ships nothing but the audio variant must still be recordable
+    api = build_api(
+        {
+            "data": {
+                "status": 2,
+                "stream_url": {
+                    "flv_pull_url": {"SD1": "https://cdn/audio.flv?sign=a&only_audio=1"}
+                },
+            },
+            "status_code": 0,
+        },
+    )
+
+    assert api.get_live_urls("123") == ["https://cdn/audio.flv?sign=a&only_audio=1"]
+
+
 def test_is_room_alive_keeps_restricted_live_as_alive():
     api = build_api(
         {"data": [{"alive": True, "room_id": 123}], "status_code": 0},
