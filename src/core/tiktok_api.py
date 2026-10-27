@@ -287,34 +287,46 @@ class TikTokAPI:
 
         return followers
 
-    def _get_stream_url_from_page(self, user: str) -> str | None:
+    def _get_stream_urls_from_page(self, user: str) -> list[str]:
         """
-        Fallback: fetch the live page HTML and extract the stream URL directly.
-        Used when the webcast API returns status code 4003110 (WAF/access restriction).
+        Fallback: fetch the live page HTML and collect every stream URL in it.
+
+        Used when the webcast API returns status code 4003110 (WAF/access
+        restriction). Returns candidates in preference order: original (_or4)
+        or SD quality first, then the remaining flv urls, then hls. The caller
+        moves audio-only urls to the end.
         """
         try:
             live_page_url = f"{self.BASE_URL}/@{user}/live"
             response = self.http_client.get(live_page_url)
             content = response.text
+            candidates: list[str] = []
 
-            flv_matches = re.findall(r'https?://[^\s"\'<>]+\.flv[^\s"\'<>]*', content)
-            if flv_matches:
-                # Prefer original (_or4) or SD quality
-                for url in flv_matches:
-                    url = html.unescape(url.rstrip("\\"))
-                    if "_or4" in url or "_sd" in url:
-                        logger.info(f"Found stream URL from page: {url[:80]}...")
-                        return url
-                return html.unescape(flv_matches[0].rstrip("\\"))
+            flv_matches = [
+                html.unescape(url.rstrip("\\"))
+                for url in re.findall(r'https?://[^\s"\'<>]+\.flv[^\s"\'<>]*', content)
+            ]
+            for url in flv_matches:
+                if "_or4" in url or "_sd" in url:
+                    self._add_live_url_candidate(candidates, url)
+            for url in flv_matches:
+                self._add_live_url_candidate(candidates, url)
 
             hls_matches = re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', content)
-            if hls_matches:
-                return html.unescape(hls_matches[0].rstrip("\\"))
+            for url in hls_matches:
+                self._add_live_url_candidate(
+                    candidates, html.unescape(url.rstrip("\\"))
+                )
 
-            return None
-        except Exception as e:
+            if candidates:
+                logger.info(
+                    f"Found {len(candidates)} stream url(s) on the live page, "
+                    f"using {candidates[0][:80]}..."
+                )
+            return candidates
+        except Exception as e:  # noqa: BLE001 - page scrape is best effort
             logger.warning(f"Failed to extract stream URL from page: {e}")
-            return None
+            return []
 
     @staticmethod
     def _is_audio_only(url: str) -> bool:
@@ -364,9 +376,9 @@ class TikTokAPI:
                 logger.info(
                     "API blocked by WAF (4003110). Trying fallback: extract stream URL from live page..."
                 )
-                fallback_url = self._get_stream_url_from_page(user)
-                if fallback_url:
-                    return [fallback_url]
+                fallback_urls = self._get_stream_urls_from_page(user)
+                if fallback_urls:
+                    return self._video_first(fallback_urls)
 
             raise UserLiveError(TikTokError.LIVE_RESTRICTION)
 
